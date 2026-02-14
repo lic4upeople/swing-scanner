@@ -91,9 +91,35 @@ creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", sco
 client = gspread.authorize(creds)
 sheet = client.open("Swing Scanner Results").sheet1
 
+if market_bullish:
+    market_status = "BULLISH"
+else:
+    market_status = "NOT BULLISH"
+
 if results:
-    sheet.append_rows(results)
+    for trade in results:
+        sheet.append_row([
+            today,             # Date
+            market_status,     # Market Status
+            trade[1],          # Stock
+            trade[2],          # Entry
+            trade[3],          # Stoploss
+            trade[4],          # Target
+            trade[5],          # Position Size
+            "OPEN",            # Trade Status
+            ""                 # P&L (empty initially)
+        ])
     print("Trades recorded.")
 else:
-    sheet.append_row([today, "NO TRADE", "-", "-", "-", "-"])
+    sheet.append_row([
+        today,
+        market_status,
+        "NO TRADE",
+        "-",
+        "-",
+        "-",
+        "-",
+        "NO TRADE",
+        ""
+    ])
     print("No trade day recorded.")
