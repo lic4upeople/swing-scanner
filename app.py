@@ -3,102 +3,62 @@ import pandas as pd
 import numpy as np
 import logging
 import datetime
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-capital = 10000
 risk_per_trade = 200
-
-# ---------------------------
-# MARKET TREND FILTER (FIXED)
-# ---------------------------
+today = str(datetime.date.today())
 
 def market_trend_ok():
     nifty = yf.download("^NSEI", period="3mo", interval="1d", auto_adjust=True, progress=False)
 
-    # 🔥 FIX: flatten multi-index columns
     if isinstance(nifty.columns, pd.MultiIndex):
         nifty.columns = nifty.columns.get_level_values(0)
 
     nifty = nifty[['Close']]
-
     nifty['EMA20'] = nifty['Close'].ewm(span=20).mean()
     nifty['EMA50'] = nifty['Close'].ewm(span=50).mean()
-
     nifty.dropna(inplace=True)
+
     latest = nifty.iloc[-1]
 
-    close = float(latest['Close'])
-    ema20 = float(latest['EMA20'])
-    ema50 = float(latest['EMA50'])
-
-    return close > ema50 and ema20 > ema50
-
-
-# ---------------------------
-# STOCK UNIVERSE
-# ---------------------------
+    return float(latest['Close']) > float(latest['EMA50']) and float(latest['EMA20']) > float(latest['EMA50'])
 
 stocks = [
     "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS",
-    "ICICIBANK.NS","SBIN.NS","LT.NS","ITC.NS",
-    "BHARTIARTL.NS","AXISBANK.NS","MARUTI.NS",
-    "BAJFINANCE.NS","SUNPHARMA.NS","TITAN.NS"
+    "ICICIBANK.NS","SBIN.NS","LT.NS","ITC.NS"
 ]
 
 results = []
 
-# ---------------------------
-# SCANNER
-# ---------------------------
+market_bullish = market_trend_ok()
 
-if market_trend_ok():
-    print("📈 Market Trend: BULLISH")
-
+if market_bullish:
     for stock in stocks:
         try:
             data = yf.download(stock, period="3mo", interval="1d", auto_adjust=True, progress=False)
 
-            if data.empty or len(data) < 60:
-                continue
-
             if isinstance(data.columns, pd.MultiIndex):
                 data.columns = data.columns.get_level_values(0)
 
-            data = data[['High','Close','Volume']]
+            if data.empty or len(data) < 60:
+                continue
 
             data['EMA20'] = data['Close'].ewm(span=20).mean()
             data['EMA50'] = data['Close'].ewm(span=50).mean()
-            data['AvgVolume'] = data['Volume'].rolling(20).mean()
-
-            # RSI
-            delta = data['Close'].diff()
-            gain = delta.clip(lower=0)
-            loss = -delta.clip(upper=0)
-            avg_gain = gain.rolling(14).mean()
-            avg_loss = loss.rolling(14).mean()
-            rs = avg_gain / avg_loss
-            data['RSI'] = 100 - (100 / (1 + rs))
-
             data.dropna(inplace=True)
+
             latest = data.iloc[-1]
+            high_20 = float(data['High'].rolling(20).max().iloc[-1])
 
             close = float(latest['Close'])
             ema20 = float(latest['EMA20'])
             ema50 = float(latest['EMA50'])
-            rsi = float(latest['RSI'])
-            volume = float(latest['Volume'])
-            avg_volume = float(latest['AvgVolume'])
 
-            high_20 = float(data['High'].rolling(20).max().iloc[-1])
+            if close > ema50 and ema20 > ema50 and close >= 0.93 * high_20:
 
-            if (
-                close > ema50 and
-                ema20 > ema50 and
-                volume > avg_volume and
-                50 < rsi < 70 and
-                close >= 0.93 * high_20
-            ):
                 entry = round(close, 2)
                 stoploss = round(entry * 0.97, 2)
                 risk = entry - stoploss
@@ -109,27 +69,31 @@ if market_trend_ok():
                 position_size = int(risk_per_trade / risk)
                 target = round(entry + (risk * 2), 2)
 
-                results.append({
-                    "Stock": stock,
-                    "Entry": entry,
-                    "Stoploss": stoploss,
-                    "Target": target,
-                    "Position Size": position_size
-                })
+                results.append([
+                    today,
+                    stock,
+                    entry,
+                    stoploss,
+                    target,
+                    position_size
+                ])
 
-        except Exception as e:
+        except:
             continue
 
-else:
-    print("📉 Market Trend: NOT BULLISH — No aggressive swing trades today")
+# Google Sheet Save
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
 
-# ---------------------------
-# OUTPUT
-# ---------------------------
+creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+client = gspread.authorize(creds)
+sheet = client.open("Swing Scanner Results").sheet1
 
 if results:
-    print("\n🔥 Top Swing Setups:\n")
-    for r in results:
-        print(r)
+    sheet.append_rows(results)
+    print("Trades recorded.")
 else:
-    print("\n⚠️ No strong swing setups today.")
+    sheet.append_row([today, "NO TRADE", "-", "-", "-", "-"])
+    print("No trade day recorded.")
